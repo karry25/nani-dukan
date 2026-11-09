@@ -1,0 +1,10 @@
+Project: Nani Dukan - a helper for small shop owners in India.
+
+What it does: nightly check-in from one Hindi/English/Hinglish note, udhaar (credit) book with draft reminders, bills inbox (sort, total, flag duplicates), month-end close checklist, and customer-chat draft replies with prices only from the shop's catalog. It never sends anything on its own; the owner approves every draft and every learned rule.
+
+How BharatCode is used: all AI calls go through BharatCode's OpenAI-compatible model API (set LLM_BASE_URL / LLM_API_KEY on the server). The key stays server-side and is never sent to the browser. Without a key the app runs on a rule-based mock model for testing.
+
+Run: python3 server.py   (Python 3.10+, standard library only)
+Test: python3 -m unittest ; python3 evals/run_evals.py
+
+Safety: money maths is done in code, not by the model; untrusted text is fenced as data; per-user data isolation is tested; no secrets in this repo.
