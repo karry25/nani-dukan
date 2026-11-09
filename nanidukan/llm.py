@@ -106,6 +106,9 @@ class MockClient(LLMClient):
             return {"items": [], "readable": False}
         return {"items": self._pairs(n), "readable": True}
 
+    def t_purchase(self, user, images):
+        return self.t_count(user, images)
+
     def t_sale(self, user, images):
         c = _sec(user, "line")
         cust = re.match(r"\s*([A-Z][a-z]+)\s+ko\b", c)

@@ -483,6 +483,44 @@ class Service:
                 n += 1
         return n
 
+    def purchase_parse(self, uid, data=None, text=""):
+        """Read a supplier bill (photo or text) into stock-in lines. Nothing is saved until confirmed."""
+        text = clean_text(text, 3000)
+        image = None
+        if data:
+            if len(data) > 2_000_000:
+                raise AppError("File too large (max 2 MB)", 413)
+            mime, _ = sniff_image(data)
+            if not mime:
+                raise AppError("Only JPG, PNG or WEBP photos")
+            image = f"data:{mime};base64," + base64.b64encode(data).decode()
+        elif not text:
+            raise AppError("Send the supplier bill photo or paste its text")
+        ex = self._ai(uid, agents.read_purchase, text, image)
+        lines, unknown = {}, []
+        for l in ex["items"]:
+            it = self._match(uid, l["name"])
+            if it:
+                cur = lines.setdefault(it["id"], {"item_id": it["id"], "name": it["name"], "qty": 0})
+                cur["qty"] += l["qty"]
+            else:
+                unknown.append(l)
+        return {"readable": ex["readable"], "lines": list(lines.values()), "unknown": unknown}
+
+    def purchase_confirm(self, uid, lines):
+        n = 0
+        for l in lines or []:
+            try:
+                iid, q = int(l["item_id"]), int(l["qty"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if 0 < q <= 1_000_000:
+                self.stock_move(uid, iid, q, "purchase", "supplier bill")
+                n += 1
+        if not n:
+            raise AppError("Nothing to add")
+        return n
+
     def sale_parse(self, uid, text):
         text = clean_text(text, 500)
         if not text:

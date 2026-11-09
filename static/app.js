@@ -89,6 +89,20 @@ const VIEWS = {
         })}}, "Update ticked items"));
     });
     m.append(h("div", {class: "row"}, file, note, h("button", {class: "pri", on: {click: send}}, "Check stock")), out);
+    const pf = h("input", {type: "file", accept: "image/*", capture: "environment"}), pn = h("input", {placeholder: "or paste: SIM 100, Recharge card 50"}), pout = h("div", {});
+    m.append(h("h2", {}, "Stock came in? Send the supplier bill"), h("div", {class: "sub"}, "Photo or text. You tick what is right, then it is added to stock."), h("div", {class: "row"}, pf, pn, h("button", {class: "pri", on: {click: guard(null, async () => {
+      let data = null;
+      if (pf.files[0]) data = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result.split(",")[1]); r.onerror = rej; r.readAsDataURL(pf.files[0]); });
+      const d = await api("POST", "purchase/parse", {data, text: pn.value});
+      const qs = d.lines.map(l => h("input", {type: "number", value: l.qty}));
+      mount(pout, !d.readable ? h("div", {class: "callout bad"}, "I could not read the bill. Try a closer photo.") : null,
+        h("table", {}, h("tr", {}, ["Item", "Qty to add"].map(x => h("th", {}, x))), d.lines.map((l, i) => h("tr", {}, h("td", {}, l.name), h("td", {}, qs[i])))),
+        d.unknown.length ? h("div", {class: "sub"}, "Not in your price list (add them first): " + d.unknown.map(u => u.name + " " + u.qty).join(", ")) : null,
+        d.lines.length ? h("button", {class: "pri", on: {click: guard(null, async () => {
+          const r = await api("POST", "purchase/confirm", {lines: d.lines.map((l, i) => ({item_id: l.item_id, qty: Number(qs[i].value)}))});
+          mount(pout, h("div", {class: "callout ok"}, r.added + " items added to stock.")); render();
+        })}}, "Add to stock") : null);
+    })}}, "Read bill")), pout);
     const q = h("input", {type: "number", placeholder: "qty"}), sel = h("select", {}, items.map(i => h("option", {value: i.id}, i.name))), kind = h("select", {}, h("option", {value: "opening"}, "opening stock"), h("option", {value: "purchase"}, "bought stock"));
     m.append(h("h2", {}, "Ledger stock"), h("table", {}, h("tr", {}, ["Item", "In ledger"].map(x => h("th", {}, x))), items.map(i => h("tr", {}, h("td", {}, i.name), h("td", {}, i.expected)))),
       items.length ? h("div", {class: "row"}, sel, kind, q, h("button", {on: {click: guard(null, async () => { await api("POST", "stock/move", {item_id: Number(sel.value), qty: Number(q.value), kind: kind.value}); render(); })}}, "Add")) : h("div", {class: "sub"}, "Add items in Shop & prices first."));

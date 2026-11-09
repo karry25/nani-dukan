@@ -163,3 +163,11 @@ def parse_sale(llm, text):
            "paid is the rupees received now, null if not said. Do not compute totals or prices.")
     d = _json(llm.complete(sys, f"<line>{fence(text)}</line>", 250)) or {}
     return {"customer": clean_text(d.get("customer") or "", 40) or None, "items": _lines(d), "paid": _money(d.get("paid"))}
+
+
+def read_purchase(llm, text="", image=None):
+    sys = ("TASK:purchase\nRead a supplier bill or delivery note for a shop. " + DATA_NOTE +
+           'Return JSON only: {"items":[{"name":str,"qty":int}],"readable":bool}. Quantities only; ignore prices and totals. '
+           "Leave an item out if you cannot read its quantity. Never guess.")
+    d = _json(llm.complete(sys, f"<note>{fence(text)}</note>", 500, images=[image] if image else None)) or {}
+    return {"items": _lines(d), "readable": bool(d.get("readable", True))}

@@ -176,6 +176,11 @@ def make_handler(svc, demo_enabled=True, secure_cookie=False):
                 data = base64.b64decode(b["data"], validate=True) if b.get("data") else None
                 return svc.stock_count(u, data, b.get("text", "")), None
             if p == "stock/count/confirm": return {"adjusted": svc.stock_count_confirm(u, b.get("fixes"))}, None
+            if p == "purchase/parse":
+                import base64
+                data = base64.b64decode(b["data"], validate=True) if b.get("data") else None
+                return svc.purchase_parse(u, data, b.get("text", "")), None
+            if p == "purchase/confirm": return {"added": svc.purchase_confirm(u, b.get("lines"))}, None
             if p == "sale/parse": return svc.sale_parse(u, b.get("text")), None
             if p == "sale/confirm": return svc.sale_confirm(u, b.get("customer"), b.get("lines"), b.get("paid")), None
             m = re.fullmatch(r"bills/(\d+)/confirm", p)

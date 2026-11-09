@@ -40,3 +40,13 @@ class T(unittest.TestCase):
         with self.assertRaises(AppError): self.s.sale_confirm(self.b, "X", [{"item_id": self.sim, "qty": 1}], 0)
         self.assertFalse(self.s.digest(self.a)["all_clear"])
         self.assertIn("No physical stock check", " ".join(self.s.digest(self.a)["needs_you"]))
+
+    def test_purchase_bill_to_stock(self):
+        d = self.s.purchase_parse(self.a, text="SIM 40, Recharge card 10, Pen 3")
+        self.assertEqual({l["name"]: l["qty"] for l in d["lines"]}, {"SIM": 40, "Recharge card": 10})
+        self.assertEqual(d["unknown"][0]["name"], "Pen")
+        self.assertEqual(self.exp(self.a, self.sim), 100)
+        self.assertEqual(self.s.purchase_confirm(self.a, d["lines"]), 2)
+        self.assertEqual(self.exp(self.a, self.sim), 140)
+        with self.assertRaises(AppError): self.s.purchase_confirm(self.b, [{"item_id": self.sim, "qty": 5}])
+        self.assertEqual(self.exp(self.a, self.sim), 140)
