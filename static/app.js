@@ -29,7 +29,7 @@ function login(msg) {
     h("div", {class: "row"}, h("button", {class: "pri", on: {click: go("login")}}, "Sign in"), h("button", {on: {click: go("register")}}, "Create account"), h("button", {on: {click: go("demo")}}, "Try demo"))));
 }
 
-const PAGES = [["sleep", "While you sleep"], ["sale", "Quick bill"], ["stock", "Stock check"], ["today", "Tonight's check-in"], ["chats", "Customer chats"], ["udhaar", "Udhaar"], ["bills", "Bills inbox"], ["month", "Month-end"], ["rules", "Rulebook"], ["shop", "Shop & prices"], ["activity", "Activity"]];
+const PAGES = [["sleep", "While you sleep"], ["sale", "Quick bill"], ["stock", "Stock check"], ["today", "Tonight's check-in"], ["chats", "Customer chats"], ["udhaar", "Udhaar"], ["bills", "Bills inbox"], ["month", "Month-end"], ["scam", "Scam Shield"], ["rules", "Rulebook"], ["shop", "Shop & prices"], ["activity", "Activity"]];
 async function boot() {
   try { ME = await api("GET", "me"); CSRF = ME.csrf; } catch { return login(); }
   render();
@@ -185,6 +185,50 @@ const VIEWS = {
         h("h2", {}, "Bills by type"), h("table", {}, Object.entries(r.bills_by_category).map(([k, v]) => h("tr", {}, h("td", {}, k), h("td", {}, rs(v))))));
     });
     m.append(h("div", {class: "row"}, inp, h("button", {class: "pri", on: {click: go}}, "Prepare")), out); go();
+  },
+  async scam(m) {
+    title(m, "Scam Shield", "Checks payment claims against your own book, remembers flagged people, checks your QR. All plain checks - it never accuses, it only says what your records show.");
+    const d = await api("GET", "scam"), out = h("div", {});
+    const upi = h("input", {placeholder: "your UPI ID, e.g. ashastore@okhdfcbank", value: d.qr.upi_id || ""});
+    m.append(h("h2", {}, "Your UPI ID"),
+      h("div", {class: "sub"}, "Needed so the app can warn you if your counter QR is swapped. It is never shared."),
+      h("div", {class: "row"}, upi, h("button", {class: "pri", on: {click: guard(null, async () => {
+        await api("POST", "shop", {name: ME.shop.name, language: ME.shop.language, policy: ME.shop.policy, upi_id: upi.value}); await refreshMe(); render();
+      })}}, "Save")));
+    const purpose = h("select", {},
+      h("option", {value: "verify_own"}, "My counter QR (daily check)"),
+      h("option", {value: "receive"}, "Someone asked me to scan this to RECEIVE money"),
+      h("option", {value: "pay"}, "I am about to pay this QR"));
+    const qt = h("textarea", {placeholder: "Paste what your scanner app shows for the QR (starts with upi://pay?...)"});
+    const amt = h("input", {type: "number", placeholder: "expected amount (optional)"});
+    m.append(h("h2", {}, "QR check"),
+      d.qr.due ? h("div", {class: "callout bad"}, "No QR check in 7 days. Scan your counter QR now - it takes 30 seconds.") :
+        d.qr.last_ok ? h("div", {class: "callout ok"}, "Last good QR check: " + d.qr.last_ok) : null,
+      purpose, qt, h("div", {class: "row"}, amt, h("button", {class: "pri", on: {click: guard(null, async () => {
+        const v = await api("POST", "scam/qr", {text: qt.value, expected_amount: amt.value || null, purpose: purpose.value});
+        mount(out, h("div", {class: "callout " + (v.status === "ok" ? "ok" : "bad")}, v.reasons.map(r => h("div", {}, r))));
+      })}}, "Check this QR")), out);
+    const wl = h("input", {placeholder: "name / phone / UPI ID to watch"}), wn = h("input", {placeholder: "why (e.g. fake payment screen, 10 Nov)"});
+    m.append(h("h2", {}, "Scammer watchlist"),
+      h("div", {class: "sub"}, "Flag once; the name pops up in red on every future chat that mentions it."),
+      h("div", {class: "row"}, wl, wn, h("button", {class: "pri", on: {click: guard(null, async () => { await api("POST", "scam/watch", {label: wl.value, note: wn.value}); render(); })}}, "Add")),
+      d.watch.length ? h("table", {}, h("tr", {}, ["Watch", "Why", "Added", ""].map(x => h("th", {}, x))),
+        d.watch.map(w => h("tr", {}, h("td", {}, w.label), h("td", {}, w.note), h("td", {}, w.created),
+          h("td", {}, h("button", {on: {click: guard(null, async () => { await api("DELETE", "scam/watch/" + w.id); render(); })}}, "Remove"))))) :
+        h("div", {class: "callout"}, "Nobody on the watchlist."));
+    const cs = (await api("GET", "udhaar")).customers;
+    if (cs.length) {
+      const sel = h("select", {}, cs.map(c => h("option", {value: c.id}, c.name)));
+      m.append(h("h2", {}, "Evidence pack"),
+        h("div", {class: "sub"}, "One PDF with this customer's book entries, chats and flags - for a police complaint or bank dispute."),
+        h("div", {class: "row"}, sel, h("button", {on: {click: guard(null, async () => {
+          const r = await fetch("/api/scam/evidence/" + sel.value, {headers: {"X-CSRF": CSRF}});
+          if (!r.ok) throw new Error("Could not make the pack");
+          const a = h("a", {href: URL.createObjectURL(await r.blob()), download: "evidence.pdf"}); a.click(); URL.revokeObjectURL(a.href);
+        })}}, "Download PDF")));
+    }
+    m.append(h("h2", {}, "Honest limits"),
+      h("div", {class: "callout"}, "The app cannot tell a fake screenshot from the image, and it cannot see your bank account. It compares what people CLAIM with what YOUR book shows, and reminds you to check your own account."));
   },
   async rules(m) {
     title(m, "Rulebook", "Habits the helper learned from your edits. Only rules you kept are here. Delete any time.");

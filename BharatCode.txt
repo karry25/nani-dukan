@@ -1,6 +1,6 @@
 Project: Nani Dukan - a helper for small shop owners in India.
 
-What it does: nightly check-in from one Hindi/English/Hinglish note, udhaar (credit) book with draft reminders, bills inbox (sort, total, flag duplicates), month-end close checklist, and customer-chat draft replies with prices only from the shop's catalog. It never sends anything on its own; the owner approves every draft and every learned rule.
+What it does: nightly check-in from one Hindi/English/Hinglish note, udhaar (credit) book with draft reminders, bills inbox (sort, total, flag duplicates), month-end close checklist, customer-chat draft replies with prices only from the shop's catalog, and Scam Shield: payment-claim checks against the shop's own book, a scammer watchlist, QR-swap and scan-to-receive checks, and an evidence-pack PDF. It never sends anything on its own; the owner approves every draft and every learned rule.
 
 How BharatCode is used: all AI calls go through BharatCode's OpenAI-compatible model API (base URL https://bharatcode.ai/api/model/v1, model qwen-3.8-27b; set LLM_API_KEY on the server). The key stays server-side and is never sent to the browser. Without a key the app runs on a rule-based mock model for testing.
 
@@ -9,4 +9,4 @@ Test: python3 -m unittest ; python3 evals/run_evals.py
 
 Safety: money maths is done in code, not by the model; untrusted text is fenced as data; per-user data isolation is tested; no secrets in this repo.
 
-Status (honest): built and tested end to end on a built-in rule-based mock model (28 tests, 20 chat evals). It is wired for BharatCode's Qwen endpoint, but the author's account did not have API access (student, Lite or Pro) before the deadline, so real-model quality, bill-photo reading and shelf-photo counting are NOT measured yet.
+Status (honest): built and tested end to end on a built-in rule-based mock model (52 tests, 20 chat evals - 17 pass on the mock, the 3 misses are mock word-matching limits, and all 6 prompt-injection attacks are blocked). Scam Shield is plain code, fully tested, and needs no AI. The app is wired for BharatCode's Qwen endpoint, but the author's account did not have API access (student, Lite or Pro) before the deadline, so real-model quality, bill-photo reading and shelf-photo counting are NOT measured yet. Current stage: tested MVP, not deployed.

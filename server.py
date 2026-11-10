@@ -132,6 +132,14 @@ def make_handler(svc, demo_enabled=True, secure_cookie=False):
                 if p == "bills": return {"bills": svc.bills(u)}, None
                 if p == "stock": return {"items": svc.stock(u)}, None
                 if p == "digest": return svc.digest(u), None
+                if p == "scam": return {"watch": svc.watch_list(u), "qr": svc.qr_status(u)}, None
+                m = re.fullmatch(r"scam/evidence/(\d+)", p)
+                if m:
+                    pdf, name = svc.evidence_pack(u, int(m.group(1)))
+                    safe = re.sub(r"[^A-Za-z0-9_-]+", "-", name)[:40] or "customer"
+                    self._send(200, pdf, "application/pdf",
+                               {"Content-Disposition": f"attachment; filename=evidence-{safe}.pdf"})
+                    raise _Done()
                 if p == "activity": return {"activity": svc.activity(u)}, None
                 m = re.fullmatch(r"month/(\d{4}-\d{2})", p)
                 if m: return svc.month_close(u, m.group(1)), None
@@ -146,12 +154,15 @@ def make_handler(svc, demo_enabled=True, secure_cookie=False):
                 if m:
                     (svc.del_rule if m.group(1) == "rules" else svc.del_item)(u, int(m.group(2)))
                     return ok
+                m = re.fullmatch(r"scam/watch/(\d+)", p)
+                if m:
+                    svc.watch_del(u, int(m.group(1))); return ok
                 if p == "account":
                     svc.delete_account(u); return ok
                 raise AppError("Not found", 404)
             # POST
             if p == "logout": svc.logout(tok); return ok
-            if p == "shop": svc.set_shop(u, b.get("name"), b.get("language"), b.get("policy")); return ok
+            if p == "shop": svc.set_shop(u, b.get("name"), b.get("language"), b.get("policy"), b.get("upi_id")); return ok
             if p == "catalog": return {"id": svc.add_item(u, b.get("name"), b.get("price"))}, None
             if p == "chats": return svc.add_chat(u, b.get("text")), None
             m = re.fullmatch(r"chats/(\d+)/(edit|rule)", p)
@@ -163,6 +174,8 @@ def make_handler(svc, demo_enabled=True, secure_cookie=False):
                 svc.ledger_add(u, b.get("name"), b.get("amount"), b.get("kind"), b.get("note", "")); return ok
             m = re.fullmatch(r"udhaar/(\d+)/nudge", p)
             if m: return svc.nudge(u, int(m.group(1))), None
+            if p == "scam/watch": return {"id": svc.watch_add(u, b.get("label"), b.get("note", ""))}, None
+            if p == "scam/qr": return svc.qr_check(u, b.get("text"), b.get("expected_amount"), b.get("purpose") or "verify_own"), None
             if p == "checkin/parse": return svc.parse_checkin(u, b.get("text")), None
             if p == "checkin/save":
                 svc.save_checkin(u, b.get("data") or {}, b.get("raw", ""), b.get("day")); return ok

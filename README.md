@@ -12,12 +12,13 @@ A helper for small shop owners in India. It does the boring daily work and never
 - **Quick bill**: type or dictate one line ("Ramesh ko 10 SIM, 5 recharge card, paid 300"). Prices come from your catalog, the total is added by code, stock goes down and any unpaid part goes to udhaar, after one Confirm tap.
 - **Stock check**: send a shelf photo; the AI counts, code compares with the ledger (match, short, extra, not seen). Counts are marked AI counts; nothing changes until you tick items to fix.
 - **Rulebook and Activity**: see, delete and audit everything the helper learned or did.
+- **Scam Shield** (plain code, no AI): checks payment CLAIMS in chats against your own udhaar book and flags mismatches ("says Rs 300 paid, book shows Rs 900 pending"), overpayment-cash-back trick, and pressure phrases ("SMS late aata hai", screenshot-as-proof, fake customer care); a scammer watchlist (name/phone/UPI) that pops up in red on any future chat; a QR check that catches QR-swap (your counter QR suddenly paying someone else's UPI ID) and the "scan to receive money" trick; and a one-tap evidence-pack PDF for police/bank complaints. It never accuses anyone - it only shows what your own records say.
 
 ## Run it
 ```
 python3 server.py            # mock model, no key needed
 LLM_API_KEY=... python3 server.py   # real model (BharatCode OpenAI-compatible endpoint)
-python3 -m unittest          # 27 tests
+python3 -m unittest          # 52 tests
 python3 evals/run_evals.py   # 20 chat evals incl. 6 prompt-injection attacks
 ```
 Python 3.10+, standard library only.
@@ -33,6 +34,7 @@ Python 3.10+, standard library only.
 - Delete account removes all data and uploaded files.
 
 ## Honest limits
-- Tested with a rule-based mock model. Real-model quality (Hinglish, bill photos) is measured only when a key is set; run `evals/run_evals.py`.
+- Tested with a rule-based mock model (52 unit tests pass; 17 of 20 chat evals pass on the mock - the 3 misses are mock word-matching limits, not security failures; all 6 injection attacks are blocked). Real-model quality (Hinglish, bill photos) is measured only when a key is set; run `evals/run_evals.py`.
+- Scam Shield compares claims with YOUR book. It cannot see your bank account, and it cannot tell a fake screenshot from the image itself - nobody reliably can. The flag says "not confirmed in your records", never "fake".
 - SQLite file storage: fine for a demo, back it up for real use. No HTTPS built in (put it behind a TLS proxy and set the Secure cookie flag).
 - Nightly check-in is a form you open; there is no push reminder because the app never contacts anyone.

@@ -8,9 +8,10 @@ import os
 import re
 import time
 
-from . import agents
+from . import agents, scam
 from .db import DB, jdump, jload
 from .llm import LLMError
+from .pdf import build_pdf
 from .security import (RateLimiter, clean_text, hash_password, new_token, sniff_image, token_digest,
                        valid_password, valid_username, verify_password, MAX_CHAT)
 
@@ -35,6 +36,10 @@ class Service:
         self.user_cap, self.demo_cap, self.global_cap = user_cap, demo_cap, global_cap
         self.rl = RateLimiter()
         self.today = now or today
+        try:  # upgrade older databases in place
+            self.db.x("ALTER TABLE shops ADD COLUMN upi_id TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
 
     # ---------- auth
     def register(self, username, password, shop_name, ip="?"):
@@ -83,7 +88,7 @@ class Service:
         self.db.x("DELETE FROM sessions WHERE token=?", (token_digest(token),))
 
     def delete_account(self, uid):
-        for t in ("chats", "rules", "catalog", "ledger", "daily", "bills", "activity", "usage", "sessions", "customers", "shops", "stock_moves", "sales"):
+        for t in ("chats", "rules", "catalog", "ledger", "daily", "bills", "activity", "usage", "sessions", "customers", "shops", "stock_moves", "sales", "watch", "qr_checks"):
             self.db.x(f"DELETE FROM {t} WHERE user_id=?", (uid,))
         self.db.x("DELETE FROM users WHERE id=?", (uid,))
         d = os.path.join(self.upload_dir, str(uid))
@@ -123,9 +128,15 @@ class Service:
 
     # ---------- shop, catalog, rules
     def shop(self, uid):
-        return self.db.one("SELECT name,language,policy FROM shops WHERE user_id=?", (uid,))
+        return self.db.one("SELECT name,language,policy,upi_id FROM shops WHERE user_id=?", (uid,))
 
-    def set_shop(self, uid, name, language, policy):
+    def set_shop(self, uid, name, language, policy, upi_id=None):
+        if upi_id is not None:
+            upi_id = clean_text(upi_id, 60)
+            if upi_id and not scam.valid_upi(upi_id):
+                raise AppError("UPI ID looks wrong. It looks like name@bank (example: ashastore@okhdfcbank)")
+            self.db.x("UPDATE shops SET upi_id=? WHERE user_id=?", (upi_id, uid))
+            self.log(uid, "you", "set UPI ID", upi_id or "(cleared)")
         self.db.x("UPDATE shops SET name=?,language=?,policy=? WHERE user_id=?",
                   (clean_text(name, 60) or "My shop", clean_text(language, 20) or "hinglish", clean_text(policy, 600), uid))
 
@@ -161,6 +172,9 @@ class Service:
         cat, rules, pol = self.catalog(uid), self.rules(uid), self.shop(uid)["policy"]
         draft = "" if tags["category"] == "spam" else self._ai(uid, agents.reply, text, tags, cat, rules, pol)
         flags = agents.check_draft(draft, cat) if draft else []
+        flags += self._scam_flags(uid, text)
+        if self._watch_hits(uid, text):
+            tags["urgency"] = 3
         cid = self.db.x("INSERT INTO chats(user_id,text,category,urgency,draft,flags,created) VALUES(?,?,?,?,?,?,?)",
                         (uid, text, tags["category"], tags["urgency"], draft, jdump(flags), self.today().isoformat()))
         for r in rules:
@@ -217,6 +231,109 @@ class Service:
         else:
             self.log(uid, "you", "declined a rule", c["pending_rule"])
         self.db.x("UPDATE chats SET pending_rule=NULL WHERE id=? AND user_id=?", (cid, uid))
+
+    # ---------- Scam Shield (all checks are plain code; outputs are flags, never actions)
+    def _balances_map(self, uid):
+        return {b["name"].lower(): b["owed"] for b in self.balances(uid)}
+
+    def _scam_flags(self, uid, text):
+        flags = scam.claim_flags(scam.extract_payment_claim(text), self._balances_map(uid))
+        for w in self._watch_hits(uid, text):
+            flags.insert(0, f"WATCHLIST: {w['label']} is on your scammer watchlist ({w['note'] or 'no note'}). Be careful.")
+        return flags
+
+    def _watch_hits(self, uid, text):
+        t = (text or "").lower()
+        digits = re.sub(r"\D", "", t)
+        hits = []
+        for w in self.watch_list(uid):
+            lab = w["label"]
+            d = re.sub(r"\D", "", lab)
+            if len(d) >= 6 and d == re.sub(r"\D", "", lab) and len(lab.strip()) == len(d):
+                if d in digits:
+                    hits.append(w)
+            elif len(lab) >= 3 and lab.lower() in t:
+                hits.append(w)
+        return hits
+
+    def watch_list(self, uid):
+        return self.db.q("SELECT id,label,note,created FROM watch WHERE user_id=? ORDER BY id DESC", (uid,))
+
+    def watch_add(self, uid, label, note=""):
+        label = clean_text(label, 60)
+        if len(label) < 3:
+            raise AppError("Give a name, phone number or UPI ID to watch (3+ characters)")
+        try:
+            wid = self.db.x("INSERT INTO watch(user_id,label,note,created) VALUES(?,?,?,?)",
+                            (uid, label, clean_text(note, 200), self.today().isoformat()))
+        except Exception:
+            raise AppError("Already on your watchlist")
+        self.log(uid, "you", "added to watchlist", label)
+        return wid
+
+    def watch_del(self, uid, wid):
+        w = self.db.one("SELECT label FROM watch WHERE id=? AND user_id=?", (wid, uid))
+        self.db.x("DELETE FROM watch WHERE id=? AND user_id=?", (wid, uid))
+        if w:
+            self.log(uid, "you", "removed from watchlist", w["label"])
+
+    def qr_check(self, uid, text, expected_amount=None, purpose="verify_own"):
+        text = clean_text(text, 500)
+        if not text:
+            raise AppError("Paste the scanned QR text first (any scanner app shows it)")
+        if purpose not in ("verify_own", "receive", "pay"):
+            purpose = "pay"
+        try:
+            expected_amount = None if expected_amount in (None, "") else int(expected_amount)
+        except (TypeError, ValueError):
+            raise AppError("Expected amount must be a whole number")
+        own = (self.shop(uid) or {}).get("upi_id", "")
+        v = scam.check_qr(text, own, expected_amount, purpose)
+        self.db.x("INSERT INTO qr_checks(user_id,day,status,purpose) VALUES(?,?,?,?)",
+                  (uid, self.today().isoformat(), v["status"], purpose))
+        self.log(uid, "you", "QR check", f"{purpose}: {v['status']}")
+        return v
+
+    def qr_status(self, uid):
+        own = (self.shop(uid) or {}).get("upi_id", "")
+        last = self.db.one("SELECT day FROM qr_checks WHERE user_id=? ORDER BY id DESC LIMIT 1", (uid,))
+        ok = self.db.one("SELECT MAX(day) d FROM qr_checks WHERE user_id=? AND status='ok'", (uid,))["d"]
+        return {"upi_id": own, "last_check": last["day"] if last else None,
+                "last_ok": ok,
+                "due": bool(own) and (not ok or (self.today() - dt.date.fromisoformat(ok)).days >= 7)}
+
+    def evidence_pack(self, uid, customer_id):
+        b = next((x for x in self.balances(uid) if x["id"] == customer_id), None)
+        if not b:
+            raise AppError("Customer not found", 404)
+        name = b["name"]
+        entries = self.db.q("""SELECT l.day,l.kind,l.amount,l.note FROM ledger l
+            WHERE l.user_id=? AND l.customer_id=? ORDER BY l.id DESC LIMIT 60""", (uid, customer_id))
+        chats = [c for c in self.chats(uid) if name.lower() in c["text"].lower()][:20]
+        watch = [w for w in self.watch_list(uid) if w["label"].lower() in name.lower() or name.lower() in w["label"].lower()]
+        shop = self.shop(uid)
+        gen = dt.datetime.now(IST).strftime("%Y-%m-%d %H:%M IST")
+        sections = [
+            ("About this pack", [
+                f"Shop: {shop['name']}. Made on {gen} by Nani Dukan from the shop's own records.",
+                "Use it for a police complaint or bank dispute. It shows what the shopkeeper wrote down; "
+                "it does not by itself prove a payment happened or did not happen."]),
+            (f"Customer: {name}", [
+                f"Current balance in the udhaar book: Rs {b['owed']} "
+                f"({'owes the shop' if b['owed'] > 0 else 'nothing pending' if b['owed'] == 0 else 'shop owes them'})."]),
+            ("Udhaar book entries (newest first)",
+             [f"{e['day']}  |  {'gave on udhaar' if e['kind'] == 'credit' else 'paid back'}  |  Rs {e['amount']}  |  {e['note']}" for e in entries]
+             or ["No entries recorded."]),
+            ("Watchlist", [f"{w['label']} - {w['note'] or 'no note'} (added {w['created']})" for w in watch]
+             or ["This name is not on the scammer watchlist."]),
+            ("Related customer chats (newest first)",
+             [f"{c['created']} [{c['category']}] {c['text'][:300]}" +
+              (f" || flags: {'; '.join(c['flags'])}" if c["flags"] else "") for c in chats]
+             or ["No chats mention this name."]),
+        ]
+        pdf = build_pdf(f"Evidence pack - {name}", sections)
+        self.log(uid, "you", "made an evidence pack", name)
+        return pdf, name
 
     # ---------- udhaar
     def _customer(self, uid, name):
@@ -588,6 +705,11 @@ class Service:
         nb = self.db.one("SELECT COUNT(*) n FROM bills WHERE user_id=? AND status IN ('needs_review','duplicate')", (uid,))["n"]
         if nb:
             todo.append(f"{nb} bills need a look.")
+        qs = self.qr_status(uid)
+        if not qs["upi_id"]:
+            todo.append("Add your shop's UPI ID (Scam Shield page) so daily QR-swap checks can work.")
+        elif qs["due"]:
+            todo.append("No QR check in 7 days. Scan your counter QR once and confirm it still pays YOUR UPI ID (QR-swap trick).")
         last = self.db.one("SELECT MAX(day) d FROM stock_moves WHERE user_id=? AND note='physical count'", (uid,))["d"]
         if stock and (not last or (self.today() - dt.date.fromisoformat(last)).days > 7):
             todo.append("No physical stock check in the last 7 days. Send a shelf photo.")
